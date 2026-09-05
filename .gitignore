@@ -1,0 +1,19 @@
+# Python 缓存与虚拟环境
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 编辑器配置
+.idea/
+.vscode/
+
+# Streamlit 本地配置和系统文件
+.streamlit/secrets.toml
+.DS_Store
+Thumbs.db
+tests/.artifacts/
+
+# 生成的报表、模拟工作簿与验证截图（可由验证脚本重新生成）
+outputs/
