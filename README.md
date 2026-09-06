@@ -45,6 +45,27 @@ python -m venv .venv
 
 已有 `.venv` 时，跳过创建环境步骤，更新依赖后运行即可。在 PyCharm 中选择项目的 `.venv\Scripts\python.exe` 为解释器，运行 `app.py`。导出不需要安装 PowerPoint；打开和编辑生成的文件需要兼容的演示文稿软件。
 
+## 打包成 Windows EXE
+
+接收试用包的电脑无需安装 Python、PyCharm 或 PyInstaller。将 ZIP 完整解压，双击 `ExcelPPT.exe`，保留旁边的 `_internal` 文件夹。包内有使用说明及两份模拟 Excel。
+
+在 Windows x64 的项目开发环境执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe tools\build_windows.py
+```
+
+脚本使用 `packaging/ExcelPPT.spec`，生成 `releases/<构建时间>/ExcelPPT/ExcelPPT.exe` 和同目录的 `ExcelPPT-Windows-x64.zip`。发送 ZIP 即可。每次构建使用新目录，不删除或覆盖旧包；`build/` 中间产物和 `releases/` 分发文件已被 Git 忽略。
+
+打包子进程只使用项目 Python 和 Windows 的搜索路径，并校验 DLL 来源，避免电脑上其他软件的同名 DLL 被误打入包。不会修改系统 PATH。
+
+采用 PyInstaller 的文件夹模式和无控制台窗口模式，包含 Python、Qt、图表库和 PPT 模板。运行依赖按实际导入收集；当前源码未使用的 pandas 不打入包中。日常统计和导出不需要联网，查看 PPT 需要兼容软件。
+
+开发者可显式运行 `ExcelPPT.exe --self-test <验证输出目录>`，验证打包程序的窗口、模拟 Excel 导入、统计以及三页 / 一页 / 四页 PPT 导出。结果写入目标目录的 `result.json`，并保存窗口截图和生成的 PPT；正常双击不会运行自检。
+
+也可执行 `.\.venv\Scripts\python.exe tools\check_windows_package.py <ZIP路径>`：解压到新的验证目录，移除子进程的 Python 环境路径，再运行 EXE 自检。检查报告保存在 `outputs/EXE 验证/`。应在检查通过后再发送试用包；本机检查不能代替目标电脑试用。
+
 ## 每月使用步骤
 
 1. 在第一步页签点击 **导入第一份 Excel**，选择本月 `.xlsx` 文件。

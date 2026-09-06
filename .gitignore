@@ -17,3 +17,7 @@ tests/.artifacts/
 
 # 生成的报表、模拟工作簿与验证截图（可由验证脚本重新生成）
 outputs/
+
+# Windows 打包中间文件与分发包
+build/
+releases/

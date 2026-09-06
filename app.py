@@ -9,6 +9,9 @@ from excel_visualizer.main_window import MainWindow
 
 def main() -> int:
     """创建 Qt 应用并进入事件循环。"""
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-test":
+        from excel_visualizer.packaging_check import run_check
+        return run_check(sys.argv[2])
     application = QApplication(sys.argv)
     application.setApplicationName("Excel 月报图表与 PPT 工具")
 
