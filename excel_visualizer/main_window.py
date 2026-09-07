@@ -15,8 +15,8 @@ from excel_visualizer.chart_widget import MonthlyChartWidget
 from excel_visualizer.chart_style import ChartColors, DEFAULT_COLORS
 from excel_visualizer.issues_page import IssuesPage
 from excel_visualizer.data_service import (
-    ExcelDataError, FIELDS, FIELD_LABELS, GROUP_TITLES, MonthlyReport, SheetData,
-    build_report, guess_columns, list_sheets, read_sheet,
+    ALIASES, ExcelDataError, FIELDS, FIELD_LABELS, GROUP_TITLES, MonthlyReport, SheetData,
+    build_report, guess_columns, header_hint, list_sheets, read_sheet,
 )
 
 
@@ -247,7 +247,10 @@ class MainWindow(QMainWindow):
             box.blockSignals(False)
         self._set_mapping_enabled(True)
         self._show_source_table()
-        self.status_label.setText(f"已读取 {len(sheet.rows)} 行。请确认四个字段和 Uptime 格式，再生成图表。")
+        hint = header_hint(sheet, ALIASES, guesses)
+        self.status_label.setText(
+            f"已读取 {len(sheet.rows)} 行、{len(sheet.columns)} 列；当前表头为第 {self.header_row.value()} 行。"
+            + ("\n" + hint if hint else "请确认四个字段和 Uptime 格式，再生成图表。"))
 
     def _show_source_table(self) -> None:
         if self.sheet is None:

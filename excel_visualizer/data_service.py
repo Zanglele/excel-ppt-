@@ -10,6 +10,7 @@ from xml.etree import ElementTree
 
 from openpyxl import load_workbook
 from openpyxl.styles.colors import COLOR_INDEX
+from openpyxl.utils import get_column_letter
 
 
 NON_OPTICAL = ("XRF", "XPS", "XRD", "AFM")
@@ -148,21 +149,27 @@ def read_sheet(file_path: str | Path, sheet_name: str, header_row: int = 1) -> S
         book = load_workbook(path, data_only=False)
         values = load_workbook(path, data_only=True)
         sheet, value_sheet = book[sheet_name], values[sheet_name]
-        header_cells = list(sheet[header_row])
-        populated = [cell.column for cell in header_cells if cell.value is not None]
-        if not populated:
+        # Worksheet 的稀疏单元格表只包含已加载的单元格；避免按格式撑大的
+        # max_row/max_column 扫描整块空白区域。列宽由实际内容决定，而非表头行。
+        populated = tuple(cell for cell in sheet._cells.values()
+                          if cell.row >= header_row and cell.value is not None)
+        if not any(cell.row == header_row for cell in populated):
             raise ExcelDataError("所选表头行为空，请选择实际列名所在的行。")
-        width = max(populated)
-        columns = tuple(f"{cell.value if cell.value is not None else '未命名'} [{cell.column_letter}]"
-                        for cell in header_cells[:width])
+        width = max(cell.column for cell in populated)
+        data_rows = sorted({cell.row for cell in populated if cell.row > header_row})
+        last_row = max(cell.row for cell in populated)
+        header_cells = [sheet.cell(header_row, column) for column in range(1, width + 1)]
+        columns = tuple(f"{cell.value if cell.value is not None else '未命名'} [{get_column_letter(column)}]"
+                        for column, cell in enumerate(header_cells, 1))
         themes = _theme_colors(book)
         indexed = getattr(book, "_colors", COLOR_INDEX)
         merged_by_row: dict[int, list] = {}
         for area in sheet.merged_cells.ranges:
-            for row in range(max(header_row + 1, area.min_row), area.max_row + 1):
+            for row in range(max(header_row + 1, area.min_row), min(area.max_row, last_row) + 1):
                 merged_by_row.setdefault(row, []).append(area)
         rows, row_numbers = [], []
-        for row in sheet.iter_rows(min_row=header_row + 1, max_col=width):
+        for number in data_rows:
+            row = tuple(sheet.cell(number, column) for column in range(1, width + 1))
             if all(cell.value is None for cell in row):
                 continue
             parsed = []
@@ -205,6 +212,22 @@ def guess_columns(sheet: SheetData) -> dict[str, int]:
     names = [re.sub(r"\s+", "", name.rsplit(" [", 1)[0]).casefold() for name in sheet.columns]
     return {field: next((i for i, name in enumerate(names) if name in
                         {alias.casefold() for alias in ALIASES[field]}), -1) for field in FIELDS}
+
+
+def header_hint(sheet: SheetData, aliases: dict[str, tuple[str, ...]], guesses: dict[str, int]) -> str:
+    """缺少字段时提示可能的表头位置，不擅自跳过标题或更改用户所选行。"""
+    if all(index >= 0 for index in guesses.values()):
+        return ""
+    normalize = lambda value: re.sub(r"\s+", "", str(value)).casefold()
+    field_names = [set(map(normalize, names)) for names in aliases.values()]
+    candidates = []
+    for number, row in zip(sheet.row_numbers[:100], sheet.rows[:100]):
+        values = {normalize(cell.value) for cell in row if cell.value is not None}
+        if all(values & names for names in field_names):
+            candidates.append(number)
+    if len(candidates) == 1:
+        return f"疑似实际表头在第 {candidates[0]} 行，请修改“表头行”后点击“读取工作表 / 刷新”。"
+    return "未完整识别四个字段：请确认工作表和表头行；空表头列仍按 Excel 列字母保留，可手动选择。"
 
 
 def _text(cell: CellData) -> str:

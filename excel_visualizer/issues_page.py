@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from excel_visualizer.data_service import ExcelDataError, NON_OPTICAL, OPTICAL, list_sheets, read_sheet
-from excel_visualizer.issues_service import ISSUE_FIELDS, ISSUE_LABELS, build_issues_report, guess_issue_columns
+from excel_visualizer.data_service import ExcelDataError, NON_OPTICAL, OPTICAL, header_hint, list_sheets, read_sheet
+from excel_visualizer.issues_service import ISSUE_ALIASES, ISSUE_FIELDS, ISSUE_LABELS, build_issues_report, guess_issue_columns
 from excel_visualizer.issues_widget import IssuesChartWidget
 
 
@@ -173,7 +173,10 @@ class IssuesPage(QWidget):
             box.blockSignals(False)
         self._set_mapping_enabled(True)
         self._show_source_table()
-        self.status_label.setText(f"已读取 {len(sheet.rows)} 行，请确认四个字段，再生成问题统计。")
+        hint = header_hint(sheet, ISSUE_ALIASES, guesses)
+        self.status_label.setText(
+            f"已读取 {len(sheet.rows)} 行、{len(sheet.columns)} 列；当前表头为第 {self.header_row.value()} 行。"
+            + ("\n" + hint if hint else "请确认四个字段，再生成问题统计。"))
 
     def _set_table(self, headers, rows) -> None:
         self.table.clear()
