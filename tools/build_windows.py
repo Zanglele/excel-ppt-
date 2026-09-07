@@ -19,12 +19,12 @@ def create_samples(folder: Path) -> None:
     book = Workbook()
     sheet = book.active
     sheet.title = "月报（模拟）"
-    sheet.append(["客户名字", "山头", "uptime", "跑货量"])
-    names = ("XRF", "XPS", "XRD", "AFM", "BFI", "DFI", "DBO", "IBO", "eMBI", "PC")
+    sheet.append(["客户名字", "山头", "uptime", "跑货量", "机台编码"])
+    names = ("XRF", "XPS", "XRD", "AFM", "BFI", "DFI", "DBO", "IBO", "eMBI", "PC", "MBI")
     for i, name in enumerate(names):
-        sheet.append([f"模拟客户{i + 1}", name, 95 + i * .3, 1000 + i * 120])
-    sheet.append(["模拟未保客户", "XRF", 93, 500])
-    sheet["A12"].fill = PatternFill("solid", fgColor="FFFF00")
+        sheet.append([f"模拟客户{i + 1}", name, 95 + i * .3, 1000 + i * 120, f"SN-{i:03}"])
+    sheet.append(["模拟未保客户", "XRF", 93, 500, "SN-uninsured"])
+    sheet.cell(sheet.max_row, 1).fill = PatternFill("solid", fgColor="FFFF00")
     for column in "ABCD":
         sheet.column_dimensions[column].width = 24
     book.save(folder / "第一步模拟数据.xlsx")
@@ -34,11 +34,11 @@ def create_samples(folder: Path) -> None:
     sheet.title = "问题（模拟）"
     sheet.append(["山头", "创建时间", "产品序列号/机台编码", "服务请求状态"])
     today = datetime.now()
-    end_month = today.month if today.year == 2026 else 12
+    end_month = today.month
     for i, name in enumerate(names):
         for month in range(1, end_month + 1):
             for j in range((i + month * 2) % 8 + 1):
-                sheet.append([name, f"2026-{month}-{j + 1}", f"{name}-{j % 3:03}",
+                sheet.append([name, f"{today.year}-{month}-{j + 1}", f"{name}-{j % 3:03}",
                               ("申请关闭", "已结束", "已取消", "处理中")[(i + j) % 4]])
     for column in "ABCD":
         sheet.column_dimensions[column].width = 30
@@ -53,7 +53,7 @@ def main() -> None:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     release = root / "releases" / stamp
     release.mkdir(parents=True)
-    versions = {name: version(name) for name in ("pyinstaller", "PyQt6", "openpyxl", "matplotlib", "python-pptx")}
+    versions = {name: version(name) for name in ("pyinstaller", "PyQt6", "openpyxl", "matplotlib", "python-pptx", "pandas")}
     # 只给本次打包进程提供 Python 和 Windows 路径，避免收集其他软件的同名 DLL。
     environment = {key: value for key, value in os.environ.items()
                    if not key.upper().startswith(("PYTHON", "QT_", "PYSIDE"))

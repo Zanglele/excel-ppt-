@@ -54,6 +54,9 @@ class IssuesReportTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        self.warning_patch = patch.object(QMessageBox, "warning")
+        self.warning_patch.start()
+        self.addCleanup(self.warning_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "issues.xlsx"
@@ -76,26 +79,23 @@ class IssuesReportTests(unittest.TestCase):
         report = self.report()
         metrics = {m.product: m for m in report.metrics}
         xrf = metrics["XRF"]
-        self.assertEqual((xrf.annual_total, xrf.total, xrf.machines, xrf.closed), (4, 5, 3, 4))
+        self.assertEqual((xrf.annual_total, xrf.total, xrf.machines, xrf.closed), (4, 4, 2, 3))
         self.assertEqual(xrf.monthly, (2, 0, 0, 0, 0, 0, 0, 0, 1))
-        self.assertAlmostEqual(xrf.density, 5 / 3)
-        self.assertEqual(xrf.closure_rate, 0.8)
+        self.assertAlmostEqual(xrf.density, 2)
+        self.assertEqual(xrf.closure_rate, 0.75)
         self.assertEqual((metrics["BFI"].total, metrics["BFI"].machines, metrics["BFI"].closed), (2, 1, 1))
         self.assertEqual(metrics["额外山头"].machines, 1)
         self.assertEqual(metrics["额外山头"].density, 2)
         self.assertIsNone(metrics["AFM"].density)
         self.assertEqual(metrics["AFM"].closure_rate, 0)
-        self.assertEqual(metrics["XRD"].annual_total, 0)
-        self.assertIsNone(metrics["XRD"].closure_rate)
-        self.assertEqual(metrics["XPS"].monthly, (0,) * 9)
-        self.assertIn("XPS", report.trend_products)
-        self.assertEqual(len(report.trend_products), 5)
-        self.assertEqual(tuple(metrics)[:10], NON_OPTICAL + OPTICAL)
-        self.assertTrue(any("后续月份" in note for note in report.notes))
-        self.assertTrue(any("缺少机器" in note for note in report.notes))
+        self.assertNotIn("XRD", metrics)
+        self.assertNotIn("XPS", report.trend_products)
+        self.assertEqual(len(report.trend_products), 4)
+        self.assertEqual(tuple(metrics), ("XRF", "AFM", "BFI", "额外山头"))
+        self.assertTrue(any("编码为空" in note for note in report.notes))
 
-    def test_optional_year_scope_changes_only_density_closure_population(self):
-        report = self.report(all_years=False)
+    def test_selected_year_applies_to_density_and_closure(self):
+        report = self.report(year=2026)
         xrf = report.metrics[0]
         self.assertEqual((xrf.total, xrf.machines, xrf.closed), (4, 2, 3))
         self.assertEqual(xrf.density, 2)
@@ -105,16 +105,15 @@ class IssuesReportTests(unittest.TestCase):
 
     def test_first_step_extra_names_and_missing_products_preserved(self):
         report = self.report(products=("第一步新增", "XRF"))
-        self.assertIn("第一步新增", [m.product for m in report.metrics])
-        self.assertEqual(next(m for m in report.metrics if m.product == "第一步新增").annual_total, 0)
+        self.assertNotIn("第一步新增", [m.product for m in report.metrics])
 
-    def test_future_year_caps_trend_at_december_and_january_has_one_month(self):
+    def test_explicit_year_and_month_range(self):
         sheet = read_sheet(self.path, "问题")
         mapping = guess_issue_columns(sheet)
-        self.assertEqual(build_issues_report(sheet, mapping, today=date(2027, 2, 1)).months, tuple(range(1, 13)))
-        self.assertEqual(build_issues_report(sheet, mapping, today=date(2026, 1, 1)).months, (1,))
-        with self.assertRaisesRegex(ExcelDataError, "尚未进入"):
-            build_issues_report(sheet, mapping, today=date(2025, 1, 1))
+        self.assertEqual(build_issues_report(sheet, mapping, year=2026, start_month=2, end_month=9).months, tuple(range(2, 10)))
+        self.assertEqual(build_issues_report(sheet, mapping, year=2025, end_month=12).year, 2025)
+        with self.assertRaisesRegex(ExcelDataError, "当前时间范围无有效数据"):
+            build_issues_report(sheet, mapping, year=2027)
 
     def test_invalid_dates_and_required_values_report_excel_row(self):
         for created in ("2026-2-30", "2026-13-1", "2026/1/1", None, "坏日期", "=TODAY()"):
@@ -133,7 +132,7 @@ class IssuesReportTests(unittest.TestCase):
                          ("BFI", "2026-1-1", "001", "已结束")])
         report = self.report()
         self.assertEqual(report.metrics[0].machines, 2)
-        self.assertEqual(report.metrics[4].machines, 1)
+        self.assertEqual(report.metrics[1].machines, 1)
 
     def test_missing_mapping_duplicate_mapping_empty_and_no_2026(self):
         sheet = read_sheet(self.path, "问题")
@@ -143,15 +142,11 @@ class IssuesReportTests(unittest.TestCase):
             with self.assertRaises(ExcelDataError):
                 build_issues_report(sheet, bad_mapping, today=TODAY)
         self.write_rows([])
-        with self.assertRaisesRegex(ExcelDataError, "没有符合"):
+        with self.assertRaisesRegex(ExcelDataError, "当前时间范围无有效数据"):
             self.report()
         self.write_rows([("XRF", "2025-1-1", "001", "已结束")])
-        report = self.report()
-        self.assertEqual(report.metrics[0].annual_total, 0)
-        self.assertEqual(report.metrics[0].monthly, (0,) * 9)
-        # 无 2026 问题时仍可导出年度零值和全年的后两图。
-        output = export_issues_pptx(report, Path(self.temp.name) / "old.pptx")
-        self.assertEqual(len(Presentation(output).slides), 1)
+        with self.assertRaisesRegex(ExcelDataError, "当前时间范围无有效数据"):
+            self.report()
 
     def test_ppt_has_four_editable_charts_only_in_upper_half(self):
         report = self.report()
@@ -214,12 +209,12 @@ class IssuesReportTests(unittest.TestCase):
         with patch.object(QMessageBox, "warning") as warning:
             page.open_excel(self.path)
             page._generate_report()
-        self.assertFalse(warning.called, str(warning.call_args))
+        self.assertTrue(warning.called)
         self.assertIsNotNone(page.report)
         self.assertFalse(window.combined_export_button.isEnabled())
         self.assertTrue(page.export_button.isEnabled())
         self.assertEqual(len(page.overview.figure.axes), 4)
-        self.assertEqual(len(page.charts[1].figure.axes[0].lines), 5)
+        self.assertEqual(len(page.charts[1].figure.axes[0].lines), 4)
         page.overview.draw()
         old_issues = page.report
         monthly_path = Path(self.temp.name) / "monthly.xlsx"
@@ -230,12 +225,12 @@ class IssuesReportTests(unittest.TestCase):
         window.sheet_box.setCurrentText("月报")
         window._load_sheet()
         window._generate_report()
-        # 第一份表新增“其他产品”，旧问题报告必须重新生成以补齐横轴。
-        self.assertIsNone(page.report)
+        # 表格1的额外山头不改变表格2的有效数据范围。
+        self.assertIs(page.report, old_issues)
         page._generate_report()
         self.assertIsNot(page.report, old_issues)
         self.assertTrue(window.combined_export_button.isEnabled())
-        self.assertIn("其他产品", [m.product for m in page.report.metrics])
+        self.assertNotIn("其他产品", [m.product for m in page.report.metrics])
         output = Path(self.temp.name) / "gui.pptx"
         with patch("excel_visualizer.main_window.QFileDialog.getSaveFileName", return_value=(str(output), "")), \
              patch.object(QMessageBox, "information"):
@@ -246,7 +241,7 @@ class IssuesReportTests(unittest.TestCase):
             page.export_button.click()
         self.assertEqual(len(Presentation(output).slides), 1)
         monthly_report = window.report
-        page.scope_box.setCurrentIndex(1)
+        page.set_period(2026, 2, 9)
         self.assertFalse(window.combined_export_button.isEnabled())
         self.assertIs(window.report, monthly_report)
         self.assertFalse(page.export_button.isEnabled())

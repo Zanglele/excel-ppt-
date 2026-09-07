@@ -6,8 +6,8 @@ import re
 
 @dataclass(frozen=True)
 class ChartColors:
-    line: str = "#D45A32"
-    bar: str = "#4F81BD"
+    line: str = "#5B9BD5"
+    bar: str = "#ED7D31"
 
     def __post_init__(self) -> None:
         for field in ("line", "bar"):

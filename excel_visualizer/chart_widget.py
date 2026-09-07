@@ -34,7 +34,7 @@ class MonthlyChartWidget(FigureCanvasQTAgg):
         self.axes = self.figure.add_subplot(111)
         volume_axes = self.axes.twinx()
         positions = list(range(len(group.records)))
-        bars = volume_axes.bar(positions, [r.volume for r in group.records], width=0.58,
+        bars = volume_axes.bar(positions, [r.volume if r.volume is not None else float("nan") for r in group.records], width=0.58,
                                color=colors.bar, label="跑货量")
         self.axes.set_zorder(volume_axes.get_zorder() + 1)
         self.axes.patch.set_visible(False)
@@ -45,15 +45,15 @@ class MonthlyChartWidget(FigureCanvasQTAgg):
         self.axes.yaxis.set_major_formatter(PercentFormatter(xmax=100))
         self.axes.set_ylabel("Uptime (%)", color=colors.line)
         volume_axes.set_ylabel("跑货量", color=colors.bar)
-        volume_axes.set_ylim(0, max(1, max(r.volume for r in group.records) * 1.18))
+        volume_axes.set_ylim(0, max(1, max((r.volume for r in group.records if r.volume is not None), default=0) * 1.18))
         volume_axes.yaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
         self.axes.set_xlim(-0.65, len(positions) - 0.35)
         self.axes.set_xticks(positions, [r.label for r in group.records],
                              rotation=45 if len(positions) > 12 else 0,
                              ha="right" if len(positions) > 12 else "center",
                              fontsize=8 if len(positions) > 20 else 10)
-        self.axes.set_xlabel("产品 / 客户")
-        self.axes.set_title(group.title, pad=38)
+        self.axes.set_xlabel("机台编码 / 山头 / 客户")
+        self.axes.set_title(group.title, pad=38, fontname="Microsoft YaHei", fontsize=16, fontweight="bold")
         self.axes.grid(axis="y", linestyle="--", alpha=0.25)
         self.axes.legend([line, bars], ["Uptime（左轴）", "跑货量（右轴）"],
                          loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False)

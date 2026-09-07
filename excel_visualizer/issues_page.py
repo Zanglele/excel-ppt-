@@ -1,6 +1,7 @@
 """第二份 Excel 的独立导入、字段确认、统计核对与导出页面。"""
 
 from pathlib import Path
+from datetime import date
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
@@ -21,6 +22,7 @@ class IssuesPage(QWidget):
         super().__init__()
         self.file_path = self.sheet = self.report = None
         self.products = NON_OPTICAL + OPTICAL
+        self.year, self.start_month, self.end_month = date.today().year, 1, date.today().month
         self.open_button = QPushButton("导入第二份 Excel")
         self.file_label = QLabel("尚未选择问题统计文件")
         self.file_label.setWordWrap(True)
@@ -32,9 +34,6 @@ class IssuesPage(QWidget):
         for box in (self.sheet_box, *self.column_boxes.values()):
             box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             box.setMinimumContentsLength(10)
-        self.scope_box = QComboBox()
-        self.scope_box.addItem("全部年份（按整份问题表统计）", True)
-        self.scope_box.addItem("仅 2026 年", False)
         self.plot_button = QPushButton("生成四张问题统计图表")
         self.export_button = QPushButton("导出第二步 PPT（1 页）")
         self.status_label = QLabel("请上传含山头、创建时间、产品序列号/机台编码、服务请求状态的 .xlsx。")
@@ -69,10 +68,8 @@ class IssuesPage(QWidget):
         for i, (field, label) in enumerate(zip(ISSUE_FIELDS, ISSUE_LABELS)):
             fields.addWidget(QLabel(label + "："), i // 2, i % 2 * 2)
             fields.addWidget(self.column_boxes[field], i // 2, i % 2 * 2 + 1)
-        fields.addWidget(QLabel("密度 / 关闭率范围："), 2, 0)
-        fields.addWidget(self.scope_box, 2, 1, 1, 3)
         root.addLayout(fields)
-        hint = QLabel("前两图固定统计 2026 年，折线从 1 月到本月；PPT 四图在上半页按 2×2 排列，下半页留白。\n"
+        hint = QLabel("四图统一使用顶部统计年份；趋势使用所填起始月和结束月；PPT 四图在上半页按 2×2 排列，下半页留白。\n"
                       "问题逐行计数；机器按山头内非空编号去重；关闭状态：申请关闭、已结束、已取消。")
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -81,13 +78,14 @@ class IssuesPage(QWidget):
         actions.addWidget(self.export_button)
         actions.addStretch()
         root.addLayout(actions)
+        from excel_visualizer.details import add_chart_actions
+        self.chart_buttons = add_chart_actions(root, self, 4, self._generate_report, monthly=False)
         root.addWidget(self.status_label)
         root.addWidget(self.tabs, 1)
         self.open_button.clicked.connect(self._select_file)
         self.reload_button.clicked.connect(self._load_sheet)
         self.sheet_box.currentIndexChanged.connect(self._source_changed)
         self.header_row.valueChanged.connect(self._source_changed)
-        self.scope_box.currentIndexChanged.connect(self._mapping_changed)
         for box in self.column_boxes.values():
             box.currentIndexChanged.connect(self._mapping_changed)
         self.plot_button.clicked.connect(self._generate_report)
@@ -97,15 +95,16 @@ class IssuesPage(QWidget):
         self._set_mapping_enabled(False)
         self.export_button.setEnabled(False)
 
+    def set_period(self, year: int, start: int, end: int) -> None:
+        self.year, self.start_month, self.end_month = year, start, end
+        self._mapping_changed()
+
     def set_products(self, products: tuple[str, ...]) -> None:
-        names = tuple(dict.fromkeys(NON_OPTICAL + OPTICAL + products))
-        if names != self.products:
-            self.products = names
-            self._mapping_changed()
-            self.status_label.setText("第一步的山头名单已变化，请重新生成问题统计。")
+        # 问题图仅使用表格2中实际出现的山头，不依赖第一步。
+        self.products = NON_OPTICAL + OPTICAL
 
     def _set_mapping_enabled(self, enabled: bool) -> None:
-        for widget in (*self.column_boxes.values(), self.scope_box, self.plot_button):
+        for widget in (*self.column_boxes.values(), self.plot_button, *self.chart_buttons):
             widget.setEnabled(enabled)
 
     def _invalidate_report(self) -> None:
@@ -199,22 +198,24 @@ class IssuesPage(QWidget):
         try:
             report = build_issues_report(self.sheet,
                 {field: box.currentData() for field, box in self.column_boxes.items()},
-                products=self.products, all_years=self.scope_box.currentData())
+                year=self.year, start_month=self.start_month, end_month=self.end_month)
             for chart in (self.overview, *self.charts):
                 chart.plot_report(report)
         except (ExcelDataError, ValueError) as error:
             self.status_label.setText("生成失败，请根据提示修正 Excel 或字段选择。")
             QMessageBox.warning(self, "无法生成问题统计", str(error))
             return
+        if len(report.notes) > 1:
+            QMessageBox.warning(self, "统计提示", "\n".join(report.notes))
         self.report = report
         self.export_button.setEnabled(True)
         self.report_changed.emit()
         self.status_label.setText(
-            f"2026年问题 {sum(m.annual_total for m in report.metrics)} 条；"
+            f"{report.year}年问题 {sum(m.annual_total for m in report.metrics)} 条；"
             f"月度趋势 {len(report.trend_products)} 个山头；密度及关闭率：{report.scope}。\n"
             + "\n".join(report.notes))
-        self._set_table(["山头", "2026年问题数", f"总问题数（{report.scope}）", "去重机器数", "问题密度",
-                         "关闭数", "关闭率", *(f"2026-{month:02}" for month in report.months)],
+        self._set_table(["山头", f"{report.year}年问题数", f"总问题数（{report.scope}）", "去重机器数", "问题密度",
+                         "关闭数", "关闭率", *(f"{report.year}-{month:02}" for month in report.months)],
                         [(m.product, m.annual_total, m.total, m.machines,
                           "N/A" if m.density is None else f"{m.density:.2f}", m.closed,
                           "N/A" if m.closure_rate is None else f"{m.closure_rate:.1%}", *m.monthly)

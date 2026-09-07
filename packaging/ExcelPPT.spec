@@ -13,7 +13,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={"matplotlib": {"backends": ["QtAgg"]}},
     runtime_hooks=[],
-    excludes=["tkinter", "PyQt5", "PySide2", "PySide6", "pandas"],
+    excludes=["tkinter", "PyQt5", "PySide2", "PySide6"],
     noarchive=False,
 )
 # 外部软件的 DLL 混入会使开发环境可运行、冻结程序却加载失败。

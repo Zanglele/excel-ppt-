@@ -14,11 +14,12 @@ from openpyxl.utils import get_column_letter
 
 
 NON_OPTICAL = ("XRF", "XPS", "XRD", "AFM")
-OPTICAL = ("BFI", "DFI", "DBO", "IBO", "eMBI", "PC")
+OPTICAL = ("BFI", "DFI", "DBO", "IBO", "eMBI", "PC", "MBI")
 GROUP_TITLES = ("入质保 · 非光学产品", "入质保 · 光学产品", "未入质保 · 所有产品")
-FIELDS = ("customer", "product", "uptime", "volume")
-FIELD_LABELS = ("客户名字", "山头 / 产品", "Uptime", "跑货量")
+FIELDS = ("customer", "product", "uptime", "volume", "machine")
+FIELD_LABELS = ("客户名字", "山头 / 产品", "Uptime", "跑货量", "产品序列号/机台编码")
 ALIASES = {
+    "machine": ("产品序列号/机台编码", "产品序列号／机台编码", "产品序列号", "机台编码", "机器编号", "serialnumber", "sn"),
     "customer": ("客户名字", "客户名称", "客户", "所有客户的名字", "customer", "customername"),
     "product": ("山头", "产品", "产品名称", "产品类型", "product", "tool", "山头/产品"),
     "uptime": ("uptime", "uptime(%)", "uptime（%）", "uptime%", "稼动率", "开机率"),
@@ -55,13 +56,14 @@ class SheetData:
 class ReportRecord:
     product: str
     customer: str
-    uptime: float  # 百分制，0 到 100
-    volume: float
+    uptime: float | None  # 百分制，0 到 100；None 保留缺失
+    volume: float | None
     source_row: int
+    machine: str = ""
 
     @property
     def label(self) -> str:
-        return f"{self.product}\n{self.customer}"
+        return f"{self.machine}\n{self.product}\n{self.customer}"
 
 
 @dataclass(frozen=True)
@@ -227,7 +229,7 @@ def header_hint(sheet: SheetData, aliases: dict[str, tuple[str, ...]], guesses: 
             candidates.append(number)
     if len(candidates) == 1:
         return f"疑似实际表头在第 {candidates[0]} 行，请修改“表头行”后点击“读取工作表 / 刷新”。"
-    return "未完整识别四个字段：请确认工作表和表头行；空表头列仍按 Excel 列字母保留，可手动选择。"
+    return "未完整识别必要字段：请确认工作表和表头行；空表头列仍按 Excel 列字母保留，可手动选择。"
 
 
 def _text(cell: CellData) -> str:
@@ -254,31 +256,34 @@ def _number(cell: CellData, percentage: bool, uptime_mode: str) -> float:
     number = float(numeric_text.replace(",", ""))
     number_format = re.sub(r'"[^"]*"|\\.', "", cell.number_format)
     if percentage and not explicit_percent:
-        if uptime_mode == "fraction" or (uptime_mode == "excel" and "%" in number_format):
+        if uptime_mode == "fraction" or (uptime_mode == "excel" and "%" in number_format) or (uptime_mode == "auto" and ("%" in number_format or 0 <= number <= 1)):
             number *= 100
     if not isfinite(number) or number < 0 or (percentage and number > 100):
         raise ExcelDataError(f"{cell.coordinate} {'Uptime 必须在 0–100% 之间' if percentage else '跑货量必须是有限非负数'}")
     return number
 
 
-def build_report(sheet: SheetData, mapping: dict[str, int], uptime_mode: str = "excel") -> MonthlyReport:
-    if uptime_mode not in ("excel", "points", "fraction"):
+def build_report(sheet: SheetData, mapping: dict[str, int], uptime_mode: str = "auto") -> MonthlyReport:
+    if uptime_mode not in ("auto", "excel", "points", "fraction"):
         raise ExcelDataError("未知的 Uptime 数值格式。")
     if any(mapping.get(field, -1) not in range(len(sheet.columns)) for field in FIELDS):
-        raise ExcelDataError("请为客户名字、山头、Uptime、跑货量选择对应列。")
-    if len({mapping[field] for field in FIELDS}) != 4:
-        raise ExcelDataError("四个字段必须对应四个不同的列。")
+        raise ExcelDataError("请为客户名字、山头、Uptime、跑货量、机台编码选择对应列。")
+    if len({mapping[field] for field in FIELDS}) != len(FIELDS):
+        raise ExcelDataError("每个字段必须对应不同的列。")
     if mapping["customer"] in sheet.conditional_columns:
         raise ExcelDataError("客户列包含条件格式，无法可靠读取其最终显示颜色。请在 Excel 中把质保标记改为直接的黄色单元格填充后再导入。")
     canonical = {name.casefold(): name for name in NON_OPTICAL + OPTICAL}
     grouped: list[list[ReportRecord]] = [[], [], []]
-    errors = []
+    errors, notes = [], []
     for row_number, row in zip(sheet.row_numbers, sheet.rows):
         cells = {field: row[mapping[field]] for field in FIELDS}
         if all(cell.value is None and not cell.formula for cell in cells.values()):
             continue
         try:
             customer, product = _text(cells["customer"]), _text(cells["product"])
+            machine = _text(cells["machine"])
+            if product.casefold() not in canonical:
+                notes.append(f"第 {row_number} 行，机台 {machine}：发现名单外山头 {product}")
             if cells["customer"].unsupported_fill:
                 raise ExcelDataError(f"{cells['customer'].coordinate} 填充色无法可靠识别，请改用纯色填充")
             product = canonical.get(product.casefold(), product)
@@ -289,19 +294,24 @@ def build_report(sheet: SheetData, mapping: dict[str, int], uptime_mode: str = "
             elif product in OPTICAL:
                 group_index = 1
             else:
-                raise ExcelDataError(f"未标黄的产品“{product}”不在指定的 10 种产品中，请核对名称或质保标记")
-            grouped[group_index].append(ReportRecord(product, customer,
-                _number(cells["uptime"], True, uptime_mode),
-                _number(cells["volume"], False, uptime_mode), row_number))
+                raise ExcelDataError(f"未标黄的产品“{product}”不在指定的 11 种产品中，请核对名称或质保标记")
+            numbers = []
+            for field in ("uptime", "volume"):
+                cell = cells[field]
+                missing = not cell.formula and (cell.value is None or not str(cell.value).strip())
+                numbers.append(None if missing else _number(cell, field == "uptime", uptime_mode))
+            if None in numbers:
+                absent = "、".join(name for name, value in zip(("Uptime", "Run货量"), numbers) if value is None)
+                notes.append(f"第 {row_number} 行，机台 {machine}：{absent}为空，保留缺失值，不填0。")
+            grouped[group_index].append(ReportRecord(product, customer, *numbers, row_number, machine))
         except ExcelDataError as error:
             errors.append(f"第 {row_number} 行：{error}")
     if errors:
         raise ExcelDataError(f"发现 {len(errors)} 行数据问题，请修正后生成（未跳过错误行）：\n" +
-                             "\n".join(errors[:20]) + ("\n其余问题请修正后重试。" if len(errors) > 20 else ""))
+                             "\n".join(errors))
     if not any(grouped):
-        raise ExcelDataError("没有可生成月报的数据。")
+        raise ExcelDataError("当前时间范围无有效数据")
     order = {name: i for i, name in enumerate(NON_OPTICAL + OPTICAL)}
-    notes = []
     for group in grouped:
         group.sort(key=lambda record: (order.get(record.product, len(order)), record.product.casefold(), record.source_row))
         repeated = Counter((r.product, r.customer) for r in group)

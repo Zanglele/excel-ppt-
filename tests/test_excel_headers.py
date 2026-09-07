@@ -108,8 +108,11 @@ class ExcelHeaderTests(unittest.TestCase):
         self.assertEqual((xrf.total, xrf.machines, xrf.closed, xrf.density, xrf.closure_rate), (2, 1, 1, 2, .5))
         book = Workbook()
         sheet = book.active
-        sheet.append(["客户名字", "山头", "uptime", "跑货量"])
-        sheet.append(["模拟客户", "XRF", 98, 100])
+        sheet.append(["客户名字", "山头", "uptime", "跑货量", "机台编码"])
+        sheet.append(["模拟客户", "XRF", 98, 100, "001"])
+        sheet.append(["光学客户", "MBI", 98, 100, "002"])
+        sheet.append(["未保客户", "XRF", 98, 100, "003"])
+        sheet["A4"].fill = PatternFill("solid", fgColor="FFFF00")
         monthly_path = self.path.parent / "monthly.xlsx"
         book.save(monthly_path)
         book.close()

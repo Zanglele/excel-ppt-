@@ -1,6 +1,8 @@
 """导出前三页月报及可选的问题统计页，所有图表均可编辑。"""
 
 from copy import deepcopy
+from dataclasses import replace
+import re
 from pathlib import Path
 import os
 import tempfile
@@ -46,10 +48,10 @@ def _textbox(slide, text: str, x: float, y: float, w: float, h: float, size: int
 
 
 def _add_combo_chart(slide, group: ReportGroup, colors: ChartColors) -> None:
-    volume_format = "#,##0" if all(float(r.volume).is_integer() for r in group.records) else "#,##0.00"
+    volume_format = "#,##0" if all(float(r.volume).is_integer() for r in group.records if r.volume is not None) else "#,##0.00"
     data = CategoryChartData()
     data.categories = [record.label for record in group.records]
-    data.add_series("Uptime（左轴）", [r.uptime / 100 for r in group.records], number_format="0.0%")
+    data.add_series("Uptime（左轴）", [r.uptime / 100 if r.uptime is not None else None for r in group.records], number_format="0.0%")
     data.add_series("跑货量（右轴）", [r.volume for r in group.records], number_format=volume_format)
     chart = slide.shapes.add_chart(XL_CHART_TYPE.LINE_MARKERS, Inches(0.3), Inches(1.15),
                                   Inches(15.4), Inches(7.25), data).chart
@@ -63,7 +65,7 @@ def _add_combo_chart(slide, group: ReportGroup, colors: ChartColors) -> None:
     category_axis.tick_labels.font.name = "Microsoft YaHei"
     category_axis.tick_labels.font.size = Pt(12 if len(group.records) <= 20 else 9)
     category_axis.has_title = True
-    category_axis.axis_title.text_frame.text = "产品 / 客户"
+    category_axis.axis_title.text_frame.text = "机台编码 / 山头 / 客户"
     value_axis = chart.value_axis
     value_axis.minimum_scale = 0
     value_axis.maximum_scale = 1.05
@@ -126,7 +128,7 @@ def _add_combo_chart(slide, group: ReportGroup, colors: ChartColors) -> None:
         text.text = "跑货量"
     secondary_val.xpath("./c:numFmt")[0].set("formatCode", volume_format)
     scaling = secondary_val.xpath("./c:scaling")[0]
-    scaling.xpath("./c:max")[0].set("val", str(max(1, max(r.volume for r in group.records) * 1.18)))
+    scaling.xpath("./c:max")[0].set("val", str(max(1, max((r.volume for r in group.records if r.volume is not None), default=0) * 1.18)))
     for axis in (primary_val, secondary_val):
         _set_child(axis, "crossBetween", "between")
     # 每条记录均保留一个横轴标签，禁止自动隔条省略。
@@ -160,7 +162,7 @@ def _add_issues_slide(presentation, report: IssuesReport) -> None:
         chart.chart_title.text_frame.text = spec.title
         for paragraph in chart.chart_title.text_frame.paragraphs:
             paragraph.font.name = "Microsoft YaHei"
-            paragraph.font.size = Pt(12)
+            paragraph.font.size = Pt(16)
             paragraph.font.bold = True
         chart.has_legend = spec.kind == "line"
         if chart.has_legend:
@@ -186,7 +188,7 @@ def _add_issues_slide(presentation, report: IssuesReport) -> None:
         _set_child(category_axis._element, "tickLblSkip", 1)
         _set_child(category_axis._element, "tickMarkSkip", 1)
         for i, series in enumerate(chart.series):
-            color = RGBColor.from_string(series_color(i if spec.kind == "line" else 0)[1:])
+            color = RGBColor.from_string((series_color(i) if spec.kind == "line" else "#ED7D31")[1:])
             if spec.kind == "line":
                 series.format.line.color.rgb = color
                 series.format.line.width = Pt(1.3)
@@ -208,7 +210,7 @@ def _add_issues_slide(presentation, report: IssuesReport) -> None:
     # 页面下半部不添加页脚、说明或占位文字，保留给总结性批注。
     slide.notes_slide.notes_text_frame.text = (
         f"数据来源：{Path(report.source).name}；工作表：{report.sheet_name}\n"
-        f"前两图为2026年；月度趋势范围：1—{report.months[-1]}月。后两图统计范围：{report.scope}。\n"
+        f"四图统计年份：{report.year}；月度趋势范围：{report.months[0]}—{report.months[-1]}月。\n"
         "每行计一次问题（重复行也计数）；机器编号在各山头内去重，空编号不计机器。\n"
         "关闭率 =（申请关闭 + 已结束 + 已取消）/ 总问题数。N/A 表示分母为零。\n"
         + "\n".join(report.notes)
@@ -228,13 +230,24 @@ def export_pptx(report: MonthlyReport, output_path: str | Path, period: str = ""
     """先写临时文件再替换，失败时保留已有 PPT。"""
     if len(report.groups) != 3:
         raise ValueError("月报必须包含固定的三个分组。")
+    if any(not g.records or not any(r.uptime is not None or r.volume is not None for r in g.records) for g in report.groups):
+        raise ValueError("当前时间范围无有效数据：部分分类无法生成图表，请检查数据。")
     presentation = Presentation()
     presentation.slide_width = Inches(16)
     presentation.slide_height = Inches(9)
+    if period:
+        match = re.fullmatch(r"(\d{4})-(\d{1,2})", period.strip())
+        if not match or not 1 <= int(match[2]) <= 12:
+            raise ValueError("汇报月份必须为 YYYY-MM。")
+        year, month = map(int, match.groups())
+        prefixes = ("PX产品", "光学产品", "T2～未入质保已经Run机台")
+        report = replace(report, groups=tuple(replace(g, title=f"{prefix}{year}年{month}月Uptime&Run货量")
+                                              for g, prefix in zip(report.groups, prefixes)))
     for index, group in enumerate(report.groups, 1):
         slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-        _textbox(slide, group.title, 0.55, 0.25, 12.5, 0.65, 30)
-        _textbox(slide, period.strip(), 13.1, 0.35, 2.3, 0.5, 16, "667085")
+        title = _textbox(slide, group.title, 0.55, 0.25, 14.8, 0.65, 16)
+        title.text_frame.paragraphs[0].font.bold = True
+
         if group.records:
             _add_combo_chart(slide, group, colors)
         else:
@@ -252,6 +265,19 @@ def export_pptx(report: MonthlyReport, output_path: str | Path, period: str = ""
 
 
 def _save_presentation(presentation, output_path: str | Path) -> Path:
+    # PowerPoint 对中文使用独立的 East Asian 字体；仅设置 font.name 会回退到宋体。
+    for slide in presentation.slides:
+        roots = [slide._element] + [s.chart._chartSpace for s in slide.shapes if s.has_chart]
+        for root in roots:
+            for properties in root.xpath(".//a:defRPr | .//a:rPr | .//a:endParaRPr"):
+                matches = properties.findall("{http://schemas.openxmlformats.org/drawingml/2006/main}ea")
+                if matches:
+                    matches[0].set("typeface", "Microsoft YaHei")
+                else:
+                    east_asian = OxmlElement("a:ea")
+                    east_asian.set("typeface", "Microsoft YaHei")
+                    latin = properties.find("{http://schemas.openxmlformats.org/drawingml/2006/main}latin")
+                    properties.insert(list(properties).index(latin) + 1 if latin is not None else len(properties), east_asian)
     path = Path(output_path)
     if path.suffix.lower() != ".pptx":
         path = path.with_suffix(".pptx")

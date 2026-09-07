@@ -38,11 +38,21 @@ class MainWindow(QMainWindow):
         self.reload_button = QPushButton("读取工作表 / 刷新")
         self.column_boxes = {field: QComboBox() for field in FIELDS}
         self.uptime_mode = QComboBox()
+        self.uptime_mode.addItem("自动识别（0～1比例；大于1百分制）", "auto")
         self.uptime_mode.addItem("按 Excel 格式（普通数值 98 = 98%）", "excel")
         self.uptime_mode.addItem("普通数值全部按百分制（98 = 98%）", "points")
         self.uptime_mode.addItem("普通数值全部按小数比例（0.98 = 98%）", "fraction")
         self.period_edit = QLineEdit(date.today().strftime("%Y-%m"))
         self.period_edit.setMaxLength(12)
+        self.period_edit.setReadOnly(True)
+        self.year_box = QSpinBox()
+        self.year_box.setRange(1900, 9999)
+        self.year_box.setValue(date.today().year)
+        self.month_box = QSpinBox()
+        self.month_box.setRange(1, 12)
+        self.month_box.setValue(date.today().month)
+        self.start_month_box = QSpinBox()
+        self.start_month_box.setRange(1, 12)
         self.line_color_button = QPushButton()
         self.bar_color_button = QPushButton()
         self.reset_colors_button = QPushButton("恢复默认配色")
@@ -70,7 +80,10 @@ class MainWindow(QMainWindow):
         self.workflow_tabs.addTab(self.unresolved_page, "3. 未解决的问题统计（预留）")
         self.workflow_tabs.setTabToolTip(1, "第二份 Excel，1 页 PPT，上半页 4 张图表，下半页留白")
         self.workflow_tabs.setTabToolTip(2, "预留：第三份 Excel，1 页 PPT，3 张图表")
+        self.issues_page.set_period(self.year_box.value(), self.start_month_box.value(), self.month_box.value())
         self._build_layout()
+        for box in (self.year_box, self.month_box, self.start_month_box):
+            box.valueChanged.connect(self._period_changed)
         self._update_color_buttons()
         self.line_color_button.clicked.connect(lambda: self._choose_color("line"))
         self.bar_color_button.clicked.connect(lambda: self._choose_color("bar"))
@@ -103,7 +116,11 @@ class MainWindow(QMainWindow):
         appearance_layout = QVBoxLayout(appearance)
         color_row = QHBoxLayout()
         color_row.addWidget(QLabel("汇报月份："))
-        color_row.addWidget(self.period_edit)
+        color_row.addWidget(self.year_box)
+        color_row.addWidget(QLabel("年"))
+        color_row.addWidget(self.month_box)
+        color_row.addWidget(QLabel("月；趋势起始月："))
+        color_row.addWidget(self.start_month_box)
         color_row.addWidget(self.bar_color_button)
         color_row.addWidget(self.line_color_button)
         color_row.addWidget(self.reset_colors_button)
@@ -131,8 +148,8 @@ class MainWindow(QMainWindow):
         for index, (field, label) in enumerate(zip(FIELDS, FIELD_LABELS)):
             fields.addWidget(QLabel(f"{label}："), index // 2, (index % 2) * 2)
             fields.addWidget(self.column_boxes[field], index // 2, (index % 2) * 2 + 1)
-        fields.addWidget(QLabel("Uptime 格式："), 2, 0)
-        fields.addWidget(self.uptime_mode, 2, 1)
+        fields.addWidget(QLabel("Uptime 格式："), 3, 0)
+        fields.addWidget(self.uptime_mode, 3, 1)
         monthly_layout.addLayout(fields)
         hint = QLabel("质保按客户名字单元格的黄色填充识别；左轴为 Uptime 折线，右轴为跑货量柱形。")
         hint.setWordWrap(True)
@@ -142,9 +159,16 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.export_button)
         actions.addStretch()
         monthly_layout.addLayout(actions)
+        from excel_visualizer.details import add_chart_actions
+        self.chart_buttons = add_chart_actions(monthly_layout, self, 3, self._generate_report, monthly=True)
         monthly_layout.addWidget(self.status_label)
         monthly_layout.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
+
+    def _period_changed(self) -> None:
+        self.period_edit.setText(f"{self.year_box.value()}-{self.month_box.value():02}")
+        self._mapping_changed()
+        self.issues_page.set_period(self.year_box.value(), self.start_month_box.value(), self.month_box.value())
 
     def _update_color_buttons(self) -> None:
         for button, label, color in (
@@ -180,6 +204,8 @@ class MainWindow(QMainWindow):
             box.setEnabled(enabled)
         self.uptime_mode.setEnabled(enabled)
         self.plot_button.setEnabled(enabled)
+        for button in self.chart_buttons:
+            button.setEnabled(enabled)
 
     def _invalidate_report(self) -> None:
         self.report = None
@@ -250,7 +276,7 @@ class MainWindow(QMainWindow):
         hint = header_hint(sheet, ALIASES, guesses)
         self.status_label.setText(
             f"已读取 {len(sheet.rows)} 行、{len(sheet.columns)} 列；当前表头为第 {self.header_row.value()} 行。"
-            + ("\n" + hint if hint else "请确认四个字段和 Uptime 格式，再生成图表。"))
+            + ("\n" + hint if hint else "请确认五个字段和 Uptime 格式，再生成图表。"))
 
     def _show_source_table(self) -> None:
         if self.sheet is None:
@@ -274,8 +300,18 @@ class MainWindow(QMainWindow):
             return
         self._invalidate_report()
         try:
+            if self.start_month_box.value() > self.month_box.value():
+                raise ExcelDataError("趋势起始月不能大于结束月。")
             report = build_report(self.sheet, {field: box.currentData() for field, box in self.column_boxes.items()},
                                   self.uptime_mode.currentData())
+            from excel_visualizer.details import monthly_titles
+            report = replace(report, groups=tuple(replace(group, title=title) for group, title in
+                             zip(report.groups, monthly_titles(self.year_box.value(), self.month_box.value()))))
+            empty = [g.title for g in report.groups if not g.records or not any(r.uptime is not None or r.volume is not None for r in g.records)]
+            if empty:
+                raise ExcelDataError("当前时间范围无有效数据：" + "、".join(empty) + "\n" + "\n".join(report.notes))
+            if report.notes:
+                QMessageBox.warning(self, "数据预警（缺失值保持为空）", "\n".join(report.notes))
             for chart, group in zip(self.charts, report.groups):
                 chart.plot_group(group, self.chart_colors)
         except (ExcelDataError, ValueError) as error:
@@ -293,14 +329,15 @@ class MainWindow(QMainWindow):
 
     def _show_report_table(self, report: MonthlyReport) -> None:
         self.table.clear()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Excel 行号", "分类", "产品", "客户名字", "Uptime", "跑货量"])
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["Excel 行号", "分类", "产品", "客户名字", "机台编码", "Uptime", "跑货量"])
         self.table.setRowCount(sum(len(group.records) for group in report.groups))
         row = 0
         for group_index, group in enumerate(report.groups):
             for record in group.records:
-                values = (record.source_row, group.title, record.product, record.customer,
-                          f"{record.uptime:g}%", f"{record.volume:,.2f}".rstrip("0").rstrip("."))
+                values = (record.source_row, group.title, record.product, record.customer, record.machine,
+                          "缺失" if record.uptime is None else f"{record.uptime:g}%",
+                          "缺失" if record.volume is None else f"{record.volume:,.2f}".rstrip("0").rstrip("."))
                 for column, value in enumerate(values):
                     item = QTableWidgetItem(str(value))
                     if group_index == 2:

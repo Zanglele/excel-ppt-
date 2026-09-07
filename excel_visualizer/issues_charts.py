@@ -17,7 +17,7 @@ class IssueChart:
 
 
 def series_color(index: int) -> str:
-    palette = ("#4F81BD", "#D45A32", "#548235", "#8064A2", "#008C95",
+    palette = ("#5B9BD5", "#D45A32", "#548235", "#8064A2", "#008C95",
                "#BF9000", "#C04B87", "#404E78", "#88734B", "#747474")
     if index < len(palette):
         return palette[index]
@@ -30,16 +30,16 @@ def issue_charts(report: IssuesReport) -> tuple[IssueChart, ...]:
     names = tuple(item.product for item in report.metrics)
     by_name = {item.product: item for item in report.metrics}
     return (
-        IssueChart("2026年各山头总问题数", names,
+        IssueChart(f"{report.year}年各山头总问题数", names,
                    (("总问题数", tuple(item.annual_total for item in report.metrics)),), "问题数"),
-        IssueChart(f"2026年1—{report.months[-1]}月问题趋势",
+        IssueChart(f"{report.year}年各山头月度问题出现次数及其变化趋势",
                    tuple(f"{month}月" for month in report.months),
                    tuple((name, by_name[name].monthly) for name in report.trend_products),
                    "问题数", "line"),
-        IssueChart(f"各山头问题密度（{report.scope}）", names,
+        IssueChart(f"{report.year}年各个山头的问题密度", names,
                    (("问题密度", tuple(item.density for item in report.metrics)),),
                    "问题数 / 台", number_format="0.00"),
-        IssueChart(f"各山头关闭率（{report.scope}）", names,
+        IssueChart(f"{report.year}年各山头关闭率", names,
                    (("关闭率", tuple(item.closure_rate for item in report.metrics)),),
                    "关闭率", number_format="0.0%"),
     )

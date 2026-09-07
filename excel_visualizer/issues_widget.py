@@ -38,13 +38,13 @@ class IssuesChartWidget(FigureCanvasQTAgg):
                           ncol=min(5, len(spec.series)), fontsize=7, frameon=False)
             else:
                 values = spec.series[0][1]
-                bars = ax.bar(positions, [v if v is not None else 0 for v in values], color=series_color(0))
+                bars = ax.bar(positions, [v if v is not None else 0 for v in values], color="#ED7D31")
                 for bar, value in zip(bars, values):
                     label = ("N/A" if value is None else f"{value:.1%}" if spec.number_format.endswith("%")
                              else f"{value:.2f}" if spec.number_format == "0.00" else str(value))
                     ax.annotate(label, (bar.get_x() + bar.get_width() / 2, bar.get_height()),
                                 xytext=(0, 3), textcoords="offset points", ha="center", fontsize=7)
-            ax.set_title(spec.title, fontsize=11)
+            ax.set_title(spec.title, fontsize=16, fontname="Microsoft YaHei", fontweight="bold")
             ax.set_ylabel(spec.ylabel, fontsize=9)
             ax.set_xticks(positions, spec.categories, fontsize=8,
                           rotation=30 if len(positions) > 12 else 0)

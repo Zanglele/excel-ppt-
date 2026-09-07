@@ -10,7 +10,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openpyxl import Workbook
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from unittest.mock import patch
+from openpyxl.styles import PatternFill
 from PyQt6.QtGui import QFontDatabase
 
 from excel_visualizer.data_service import NON_OPTICAL, OPTICAL, build_report, guess_columns, read_sheet
@@ -41,9 +43,11 @@ def main():
     book = Workbook()
     sheet = book.active
     sheet.title = "月报（模拟）"
-    sheet.append(["客户名字", "山头", "uptime", "跑货量"])
+    sheet.append(["客户名字", "山头", "uptime", "跑货量", "机台编码"])
     for i, name in enumerate(NON_OPTICAL + OPTICAL):
-        sheet.append([f"模拟客户{i + 1}", name, 95 + i / 3, 1000 + i * 123])
+        sheet.append([f"模拟客户{i + 1}", name, 95 + i / 3, 1000 + i * 123, f"SN-{i:03}"])
+    sheet.append(["未保模拟客户", "XRF", 0.97, 300, "SN-T2"])
+    sheet.cell(sheet.max_row, 1).fill = PatternFill("solid", fgColor="FFFF00")
     book.save(monthly_path)
     book.close()
     issue_sheet = read_sheet(issues_path, "问题统计（模拟）")
@@ -60,12 +64,16 @@ def main():
     app = QApplication.instance() or QApplication([])
     # 离屏 Qt 平台不自动加载系统中文字体，显式加载仅用于截图验证。
     QFontDatabase.addApplicationFont("C:/Windows/Fonts/msyh.ttc")
+    patch.object(QMessageBox, "warning").start()
     window = MainWindow()
+    window.year_box.setValue(2026)
+    window.month_box.setValue(9)
     window.show()
     app.processEvents()
     window.open_excel(monthly_path)
     window._generate_report()
     app.processEvents()
+    window.grab().save(str(folder / "第一步界面.png"))
     window.workflow_tabs.setCurrentIndex(1)
     app.processEvents()
     window.issues_page.open_excel(issues_path)

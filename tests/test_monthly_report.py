@@ -42,7 +42,7 @@ def fixture(path: Path):
     sheet = book.create_sheet("月报")
     sheet.append(["模拟月报，仅用于程序验证"])
     sheet.append(["客户名字", "山头", "uptime", "跑货量"])
-    for i, product in enumerate(NON_OPTICAL + OPTICAL):
+    for i, product in enumerate(NON_OPTICAL + OPTICAL[:-1]):
         sheet.append([f"客户{i + 1}", product, 90 + i, 1000 + i * 100])
     sheet["C3"] = 0.98
     sheet["C3"].number_format = "0.0%"
@@ -54,6 +54,9 @@ def fixture(path: Path):
     sheet["A14"].fill = PatternFill("solid", fgColor=Color(indexed=5))
     sheet.append(["未保客户丙", "其他产品", 95, 500])
     sheet["A15"].fill = PatternFill("solid", fgColor=Color(theme=7, tint=0.6))
+    sheet.cell(2, 5, "机台编码")
+    for row in range(3, sheet.max_row + 1):
+        sheet.cell(row, 5, f"SN-{row}")
     book.save(path)
     book.close()
 
@@ -64,6 +67,9 @@ class MonthlyReportTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        self.warning_patch = patch.object(QMessageBox, "warning")
+        self.warning_patch.start()
+        self.addCleanup(self.warning_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "monthly.xlsx"
@@ -87,7 +93,7 @@ class MonthlyReportTests(unittest.TestCase):
         report = self.report()
         self.assertEqual([len(group.records) for group in report.groups], [4, 6, 3])
         self.assertEqual([r.product for r in report.groups[0].records], list(NON_OPTICAL))
-        self.assertEqual([r.product for r in report.groups[1].records], list(OPTICAL))
+        self.assertEqual([r.product for r in report.groups[1].records], list(OPTICAL[:-1]))
         self.assertEqual([r.uptime for r in report.groups[0].records[:2]], [98, 97.5])
         self.assertEqual(report.groups[0].records[1].volume, 1200)
         self.assertIn("其他产品", [r.product for r in report.groups[2].records])
@@ -121,7 +127,7 @@ class MonthlyReportTests(unittest.TestCase):
             self.report()
 
     def test_invalid_values_block_report(self):
-        for cell, value in (("C3", 101), ("C3", -1), ("D3", -3), ("C3", None),
+        for cell, value in (("C3", 101), ("C3", -1), ("D3", -3),
                             ("D3", "no"), ("D3", "12,34"), ("C3", True), ("D3", "NaN")):
             with self.subTest(cell=cell, value=value):
                 fixture(self.path)
@@ -144,7 +150,7 @@ class MonthlyReportTests(unittest.TestCase):
             self.report()
 
     def test_duplicate_rows_are_preserved(self):
-        self.edit(lambda sheet: sheet.append(["客户2", "XPS", 90, 200]))
+        self.edit(lambda sheet: sheet.append(["客户2", "XPS", 90, 200, "SN-extra"]))
         report = self.report()
         self.assertEqual(len(report.groups[0].records), 5)
         self.assertTrue(report.notes)
@@ -157,7 +163,7 @@ class MonthlyReportTests(unittest.TestCase):
         sheet = self.read()
         default = build_report(sheet, guess_columns(sheet))
         fractions = build_report(sheet, guess_columns(sheet), "fraction")
-        self.assertEqual(default.groups[0].records[0].uptime, 0.98)
+        self.assertEqual(default.groups[0].records[0].uptime, 98)
         self.assertEqual(fractions.groups[0].records[0].uptime, 98)
 
     def test_duplicate_mapping_rejected(self):
@@ -202,16 +208,12 @@ class MonthlyReportTests(unittest.TestCase):
                     self.assertEqual(row[2], record.volume)
                 book.close()
 
-    def test_empty_groups_keep_three_slides(self):
+    def test_empty_groups_block_export(self):
         report = self.report()
         report = replace(report, groups=(report.groups[0], replace(report.groups[1], records=()),
                                          replace(report.groups[2], records=())))
-        path = export_pptx(report, Path(self.temp.name) / "empty.pptx",
-                           colors=ChartColors(line="#112233", bar="#445566"))
-        presentation = Presentation(path)
-        self.assertEqual(len(presentation.slides), 3)
-        for slide in list(presentation.slides)[1:]:
-            self.assertIn("本月无符合条件的数据", "".join(s.text for s in slide.shapes if s.has_text_frame))
+        with self.assertRaisesRegex(ValueError, "当前时间范围无有效数据"):
+            export_pptx(report, Path(self.temp.name) / "empty.pptx")
 
     def test_failed_export_preserves_existing_file(self):
         path = Path(self.temp.name) / "existing.pptx"
